@@ -1,15 +1,33 @@
-﻿using System.Collections;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using UnityEngine;
 
 public class MaskOverlapManager : MonoBehaviour
 {
     public static MaskOverlapManager Instance { get; private set; }
 
-    private List<MaskOverlapZone> zones = new List<MaskOverlapZone>();
+    // 已注册的所有面具（MaskCardUI）
+    private List<MaskCardUI> registeredMasks = new List<MaskCardUI>();
 
-    // 吸附距离（世界/UI空间单位），超过则不吸附
+    // 拖拽结束时吸附阈值（世界/UI 单位）
+    [Tooltip("拖拽结束时与槽位距离小于此值才会吸附")]
     public float snapDistance = 80f;
+
+    // 槽位半径：宿主面具局部方向乘以此值得到槽位世界偏移
+    [Tooltip("槽位与宿主中心的距离")]
+    public float slotDistance = 60f;
+
+    // 八方向局部向量（顺时针或逆时针都可）
+    private static readonly Vector3[] slotDirs = new Vector3[]
+    {
+        new Vector3(0, 1, 0),    // 上
+        new Vector3(1, 1, 0).normalized, // 右上
+        new Vector3(1, 0, 0),    // 右
+        new Vector3(1, -1, 0).normalized, // 右下
+        new Vector3(0, -1, 0),   // 下
+        new Vector3(-1, -1, 0).normalized, // 左下
+        new Vector3(-1, 0, 0),   // 左
+        new Vector3(-1, 1, 0).normalized  // 左上
+    };
 
     void Awake()
     {
@@ -17,126 +35,84 @@ public class MaskOverlapManager : MonoBehaviour
         else Destroy(gameObject);
     }
 
-    public class MaskOverlapZone : MonoBehaviour
+    public void RegisterMask(MaskCardUI card)
     {
-        // 吸附点（默认为 transform）
-        public Transform snapPoint;
-
-        // 区域内的卡片列表
-        [HideInInspector]
-        public List<MaskCardUI> cardsInZone = new List<MaskCardUI>();
-
-        // 重叠触发阈值（0..1），可在 Inspector 调整
-        [Range(0f, 1f)]
-        public float overlapTrigger = 0.2f;
-
-        // 容量，<=0 表示无限制
-        public int capacity = 0;
-
-        // 返回吸附位置（默认使用 transform）
-        public Vector3 GetSnapPosition()
-        {
-            return snapPoint != null ? snapPoint.position : transform.position;
-        }
-
-        // 区域是否接受此卡片（可扩展为类型/标签判断）
-        public bool CanAcceptCard(MaskCardUI card)
-        {
-            if (card == null) return false;
-            if (capacity > 0 && cardsInZone.Count >= capacity) return false;
-            return true;
-        }
-
-        public void RegisterCard(MaskCardUI card)
-        {
-            if (card == null) return;
-            if (!cardsInZone.Contains(card)) cardsInZone.Add(card);
-        }
-
-        public void UnregisterCard(MaskCardUI card)
-        {
-            if (card == null) return;
-            cardsInZone.Remove(card);
-        }
+        if (card == null) return;
+        if (!registeredMasks.Contains(card)) registeredMasks.Add(card);
     }
 
-    public class MaskCardUI : MonoBehaviour
+    public void UnregisterMask(MaskCardUI card)
     {
-        // 示例引用到你的 maskData 组件（可在 Inspector 赋值）
-        public maskData mask;
-
-        // 当前临时加成（示例用途）
-        public int currentBonus = 0;
-
-        // 可在此处添加更多 API，以配合 MaskOverlapManager 与 MaskOverlapZone
-    }
-
-    public void RegisterZone(MaskOverlapZone zone)
-    {
-        if (zone == null) return;
-
-        // 避免重复注册
-        if (!zones.Contains(zone))
-        {
-            zones.Add(zone);
-            // 可在此处添加调试：Debug.Log($"注册区域: {zone.name}");
-        }
-    }
-
-    public void UnregisterZone(MaskOverlapZone zone)
-    {
-        if (zone == null) return;
-
-        if (zones.Contains(zone))
-        {
-            zones.Remove(zone);
-            
-        }
-    }
-
-    public MaskOverlapZone CheckSnap(Vector2 cardWorldPos, MaskCardUI card)
-    {
-        float closestDistance = float.MaxValue;
-        MaskOverlapZone closestZone = null;
-
-        // 遍历所有已注册区域
-        foreach (var z in zones)
-        {
-            if (z == null) continue;
-
-            // 步骤1：区域是否接受该卡片（类型、容量等规则）
-            if (!z.CanAcceptCard(card)) continue;
-
-            // 步骤2：计算距离（注意：确保坐标系一致）
-            Vector2 zonePos2 = new Vector2(z.GetSnapPosition().x, z.GetSnapPosition().y);
-            float distance = Vector2.Distance(cardWorldPos, zonePos2);
-
-            // 步骤3：在吸附距离内并且比之前更近则记录为候选
-            if (distance < snapDistance && distance < closestDistance)
-            {
-                closestDistance = distance;
-                closestZone = z;
-            }
-        }
-
-        return closestZone;
-    }
-
-    public List<MaskOverlapZone> GetAllZones()
-    {
-        return new List<MaskOverlapZone>(zones);
+        if (card == null) return;
+        registeredMasks.Remove(card);
     }
 
     /// <summary>
-    /// 清空所有已注册区域（场景切换或重置时使用）
+    /// 查找最近可用槽位（遍历所有已注册面具的 8 个槽位）
+    /// 返回 true 表示找到了合适槽位，并输出宿主、槽索引及槽位世界坐标
     /// </summary>
-    public void ClearAllZones()
+    public bool FindNearestFreeSlot(Vector2 draggedWorldPos, MaskCardUI dragging, out MaskCardUI host, out int slotIndex, out Vector3 slotWorldPos)
     {
-        zones.Clear();
+        host = null;
+        slotIndex = -1;
+        slotWorldPos = Vector3.zero;
+
+        float bestDist = float.MaxValue;
+        foreach (var h in registeredMasks)
+        {
+            if (h == null || h == dragging) continue;
+
+            for (int i = 0; i < slotDirs.Length; i++)
+            {
+                if (!h.IsSlotFree(i)) continue;
+
+                // 计算宿主槽位世界坐标（局部方向 * slotDistance）
+                Vector3 localOffset = slotDirs[i] * slotDistance;
+                Vector3 worldPos = h.transform.TransformPoint(localOffset);
+
+                float dist = Vector2.Distance(draggedWorldPos, (Vector2)worldPos);
+                if (dist < snapDistance && dist < bestDist)
+                {
+                    bestDist = dist;
+                    host = h;
+                    slotIndex = i;
+                    slotWorldPos = worldPos;
+                }
+            }
+        }
+
+        return host != null;
     }
-    public bool IsZoneRegistered(MaskOverlapZone zone)
+
+    /// <summary>
+    /// 把卡片吸附到宿主的指定槽位（会处理旧宿主清理、设置父对象、更新槽占用）。
+    /// 吸附后会触发双方的重叠计算与加成应用。
+    /// </summary>
+    public void SnapToSlot(MaskCardUI host, int slotIndex, MaskCardUI card)
     {
-        return zones.Contains(zone);
+        if (host == null || card == null) return;
+        // 先从原宿主解绑
+        if (card.attachedHost != null)
+        {
+            // 当解绑时，MaskCardUI 会在 ClearSlot 中移除相关加成
+            card.attachedHost.ClearSlot(card.attachedSlotIndex);
+        }
+
+        // 计算槽位世界位置并设置
+        Vector3 worldPos = host.transform.TransformPoint(slotDirs[slotIndex] * slotDistance);
+
+        // 设置层级（把卡片作为宿主子对象，便于一起移动/旋转）
+        card.transform.SetParent(host.transform, worldPositionStays: true);
+        card.transform.position = worldPos;
+
+        // 更新双方关系
+        host.SetSlot(slotIndex, card);
+        card.attachedHost = host;
+        card.attachedSlotIndex = slotIndex;
+
+        // 吸附后：让双方计算重叠并应用加成
+        card.OnSnappedToHost(host);
+        host.OnChildAttached(card);
     }
 }
 
