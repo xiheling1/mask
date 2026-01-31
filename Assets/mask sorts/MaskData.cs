@@ -15,6 +15,6 @@ public class maskData : MonoBehaviour
 
 public enum maskType
 {
-    独眼巨人
+    
 
 }

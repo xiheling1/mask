@@ -7,6 +7,7 @@ public class menu : MonoBehaviour
    public void StartGame()
    {
        UnityEngine.SceneManagement.SceneManager.LoadScene("Main Scenes");
+
     }
 
     public void QuitGame()

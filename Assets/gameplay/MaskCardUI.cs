@@ -9,6 +9,8 @@ using UnityEngine.UI;
 [RequireComponent(typeof(RectTransform))]
 public class MaskCardUI : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDragHandler
 {
+    public static bool IsAnyCardDragging { get; private set; } = false;
+
     public maskData mask; // 面具数据引用
 
     // 可视化的槽位子对象（Inspector 可直接拖动子对象或在运行/编辑时生成）
@@ -42,6 +44,12 @@ public class MaskCardUI : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDr
     Canvas parentCanvas;
     CanvasGroup canvasGroup;
 
+    // Canvas 控制（用于拖拽时临时置顶）
+    private Canvas selfCanvas;
+    private bool originalOverrideSorting;
+    private int originalSortingOrder;
+    private Transform originalParent;
+
     // 默认方向（与管理器一致）——用于在没有 slotAnchors 时计算默认位置
     private static readonly Vector3[] defaultDirs = new Vector3[]
     {
@@ -60,6 +68,18 @@ public class MaskCardUI : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDr
         rect = GetComponent<RectTransform>();
         canvasGroup = GetComponent<CanvasGroup>();
         parentCanvas = GetComponentInParent<Canvas>();
+
+        selfCanvas = GetComponent<Canvas>();
+        if (selfCanvas == null)
+        {
+            // 只添加 Canvas（用于 overrideSorting），但不要同时添加 GraphicRaycaster 到每个预制件上
+            selfCanvas = gameObject.AddComponent<Canvas>();
+            selfCanvas.overrideSorting = false;
+        }
+
+        originalOverrideSorting = selfCanvas.overrideSorting;
+        originalSortingOrder = selfCanvas.sortingOrder;
+        originalParent = transform.parent;
     }
 
     void OnEnable()
@@ -83,6 +103,12 @@ public class MaskCardUI : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDr
         foreach (var kv in new List<MaskCardUI>(appliedBonuses.Keys))
         {
             RemoveOverlapBonus(kv);
+        }
+
+        // 确保拖拽标志在销毁/禁用时被清理
+        if (IsAnyCardDragging)
+        {
+            IsAnyCardDragging = false;
         }
     }
 
@@ -294,6 +320,9 @@ public class MaskCardUI : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDr
 
     public void OnBeginDrag(PointerEventData eventData)
     {
+        // 标记正在拖拽卡片，通知相机不要响应拖拽
+        IsAnyCardDragging = true;
+
         if (canvasGroup != null) canvasGroup.blocksRaycasts = false;
         // 放下时临时从宿主解绑（先清理宿主的 slot 记录）
         if (attachedHost != null)
@@ -304,7 +333,16 @@ public class MaskCardUI : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDr
             // 取消父对象，保留世界位置
             transform.SetParent(parentCanvas != null ? parentCanvas.transform : null, worldPositionStays: true);
         }
+
+        // 临时将该对象提升到 UI 顶层：先把父对象设置为根 Canvas（已在上面），然后 SetAsLastSibling
         transform.SetAsLastSibling();
+
+        // 关键：如果被其他 Canvas 覆盖，临时 override sorting 并提高 sortingOrder
+        if (selfCanvas != null)
+        {
+            selfCanvas.overrideSorting = true;
+            selfCanvas.sortingOrder = 1000;
+        }
     }
 
     public void OnDrag(PointerEventData eventData)
@@ -320,6 +358,9 @@ public class MaskCardUI : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDr
 
     public void OnEndDrag(PointerEventData eventData)
     {
+        // 清除拖拽标志
+        IsAnyCardDragging = false;
+
         if (canvasGroup != null) canvasGroup.blocksRaycasts = true;
 
         Vector2 worldPos = rect.position;
@@ -331,6 +372,13 @@ public class MaskCardUI : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDr
         else
         {
             // 未吸附：可回退到原位（按需实现）
+        }
+
+        // 恢复 Canvas 排序设置
+        if (selfCanvas != null)
+        {
+            selfCanvas.overrideSorting = originalOverrideSorting;
+            selfCanvas.sortingOrder = originalSortingOrder;
         }
     }
 
@@ -436,5 +484,6 @@ public class MaskCardUI : MonoBehaviour, IBeginDragHandler, IDragHandler, IEndDr
         if (rect != null) return rect;
         return GetComponent<RectTransform>();
     }
-}
+
     #endregion
+}

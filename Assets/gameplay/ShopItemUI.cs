@@ -68,4 +68,5 @@ public class ShopItemUI : MonoBehaviour
         if (buyButton == null || itemData == null) return;
         buyButton.interactable = currentSoul >= itemData.SoulCost;
     }
+  
 }
